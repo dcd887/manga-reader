@@ -228,17 +228,17 @@ async function mdApi(path, params){
       else u.searchParams.append(k, v);
     }
   }
-  const headers = {"User-Agent":"MangaLane/1.0 (browser reader)"};
+  // 不带自定义头，保持"简单请求"：自定义 User-Agent 会触发 CORS 预检(OPTIONS)，部分网络拦截预检导致 Failed to fetch
   let err1 = null;
   try{
-    const r = await fetchT(u.toString(), headers);
+    const r = await fetchT(u.toString(), {});
     if(r.ok) return r.json();
     err1 = "HTTP "+r.status;
   }catch(e){ err1 = e.message; }
   const proxy = getProxy();
   if(proxy){
     try{
-      const r = await fetchT(proxy + "/" + u.toString(), headers);
+      const r = await fetchT(proxy + "/" + u.toString(), {});
       if(r.ok) return r.json();
       throw new Error("HTTP "+r.status);
     }catch(e){ throw new Error("直连失败（"+err1+"），代理也失败（"+e.message+"）"); }
