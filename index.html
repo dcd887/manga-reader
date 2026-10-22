@@ -21,6 +21,7 @@ header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.93);backdro
 .lang{display:flex;gap:6px}
 .lang button{border:1.5px solid var(--line);background:var(--card);border-radius:999px;padding:6px 12px;font-size:13px;cursor:pointer;color:var(--sub)}
 .lang button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.lang button.src-on{background:var(--accent);color:#fff;border-color:var(--accent)}
 main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
 .hero{text-align:center;padding:34px 0 24px}
 .hero h1{font-size:25px;font-weight:800}
@@ -31,6 +32,7 @@ main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
 .cover{position:relative;aspect-ratio:3/4;background:#e8e2d8;overflow:hidden}
 .cover img{width:100%;height:100%;object-fit:cover;display:block}
 .cover .tag{position:absolute;top:8px;left:8px;background:rgba(0,0,0,.6);color:#fff;font-size:11px;padding:3px 9px;border-radius:999px;max-width:85%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cover .src-tag{position:absolute;bottom:8px;right:8px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;padding:2px 8px;border-radius:999px}
 .info{padding:10px 12px}
 .info h3{font-size:14px;font-weight:700;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:39px}
 .info .meta{font-size:12px;color:var(--sub);margin-top:4px}
@@ -95,6 +97,9 @@ main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
       <button id="doSearch">搜索</button>
     </div>
     <div class="lang">
+      <button data-src="mangadex" class="src-on" id="srcMd">MangaDex</button>
+      <button data-src="mangapill" id="srcMp">MangaPill</button>
+      <span style="width:1px;height:18px;background:var(--line)"></span>
       <button data-lang="zh" class="on">中文</button>
       <button data-lang="en">英文</button>
       <button data-lang="">全部</button>
@@ -105,7 +110,7 @@ main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
 <div class="cfg hidden" id="cfgPanel">
   <div class="cfg-inner">
     <div style="font-weight:700;margin-bottom:8px">图源代理设置</div>
-    <div class="cfg-hint">默认直连 MangaDex 官方图源，本机打开即可用；<br>部署到 GitHub Pages 或手机访问时需填代理地址（免费 Cloudflare Worker）。</div>
+    <div class="cfg-hint">MangaDex 可直连；MangaPill 需代理（其接口不带 CORS 头）。<br>部署到 GitHub Pages 或手机访问时建议填代理地址（免费 Cloudflare Worker）。</div>
     <div class="cfg-row">
       <input id="proxyUrl" placeholder="https://你的代理名.workers.dev" autocomplete="off">
       <button id="saveProxy">保存</button>
@@ -118,7 +123,7 @@ main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
   <div id="home">
     <div class="hero">
       <h1>随时随地，打开就看</h1>
-      <p>开源图源（MangaDex）· 支持中文 / 英文 / 日文漫画 · 自动记住阅读进度</p>
+      <p>双图源（MangaDex + MangaPill）· 支持中文 / 英文 / 日文漫画 · 自动记住阅读进度</p>
     </div>
     <div id="grid" class="grid"></div>
   </div>
@@ -161,19 +166,29 @@ main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
 
 <script>
 "use strict";
-const API = "https://api.mangadex.org";
+const MD_API = "https://api.mangadex.org";
+const MP_BASE = "https://mangapill.com";
 const PROXY_KEY = "mangaReaderProxy_v1";
+const SRC_KEY = "mangaReaderSource_v1";
 const $ = s => document.querySelector(s);
 function toast(m){ const t=$("#toast"); t.textContent=m; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),1800); }
 function getProxy(){ try{ return localStorage.getItem(PROXY_KEY)||""; }catch(e){ return ""; } }
 
 let lang = "zh";
+let src = "mangadex";
 const LANG_NAME = {zh:"中文","zh-hk":"繁中",en:"英文",ja:"日文",ko:"韩文"};
+const SRC_NAME = {mangadex:"MangaDex", mangapill:"MangaPill"};
 const progKey = "mangaReaderProgress_v1";
 
 /* ---------- 工具 ---------- */
-async function api(path, params){
-  const u = new URL(API + path);
+// 带代理拼接：代理存在时 proxy + "/" + 完整URL；无代理直连
+function viaProxy(url){
+  const proxy = getProxy();
+  return proxy ? proxy + "/" + url : url;
+}
+// MangaDex JSON API（保留原逻辑）
+async function mdApi(path, params){
+  const u = new URL(MD_API + path);
   if(params){
     for(const [k,v] of Object.entries(params)){
       if(v===undefined||v===null) continue;
@@ -182,11 +197,16 @@ async function api(path, params){
       else u.searchParams.append(k, v);
     }
   }
-  const proxy = getProxy();
-  const url = proxy ? proxy + "/" + u.toString() : u.toString();
-  const r = await fetch(url, {headers:{"User-Agent":"MangaLane/1.0 (browser reader)"}});
+  const r = await fetch(viaProxy(u.toString()), {headers:{"User-Agent":"MangaLane/1.0 (browser reader)"}});
   if(!r.ok) throw new Error("HTTP "+r.status);
   return r.json();
+}
+// MangaPill HTML 抓取（必须走代理，MangaPill 无 CORS 头）
+async function mpHtml(path){
+  if(!getProxy()) throw new Error("MangaPill 需配置代理（设置 ⚙ 填入 Cloudflare Worker 地址）");
+  const r = await fetch(viaProxy(MP_BASE + path), {headers:{"User-Agent":"MangaLane/1.0 (browser reader)"}});
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  return r.text();
 }
 function titleOf(t){
   return t.zh || t["zh-hk"] || t.ja || t.en || t.ko || Object.values(t)[0] || "未知标题";
@@ -197,13 +217,66 @@ function coverUrl(m){
   return "https://uploads.mangadex.org/covers/"+m.id+"/"+rel.attributes.fileName+".256.jpg";
 }
 const langOpts = () => lang ? [lang] : ["zh","zh-hk","en","ja","ko"];
-function getProgress(mid){ try{ return (JSON.parse(localStorage.getItem(progKey))||{})[mid]; }catch(e){ return undefined; } }
-function saveProgress(mid, chId, label, page){
+// 进度 key 按源隔离：mangadex/{uuid} 或 mangapill/{slug}
+function progKeyFor(id){ return src + "/" + id; }
+function getProgress(id){ try{ return (JSON.parse(localStorage.getItem(progKey))||{})[progKeyFor(id)]; }catch(e){ return undefined; } }
+function saveProgress(id, chId, label, page){
   try{
     const all = JSON.parse(localStorage.getItem(progKey))||{};
-    all[mid] = {chId, label, page, t:Date.now()};
+    all[progKeyFor(id)] = {chId, label, page, t:Date.now(), src};
     localStorage.setItem(progKey, JSON.stringify(all));
   }catch(e){}
+}
+
+/* ---------- MangaPill 解析器 ---------- */
+function mpParseSearch(html){
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const out = [];
+  doc.querySelectorAll('a[href^="/manga/"]').forEach(a=>{
+    const href = a.getAttribute("href");
+    if(out.some(x=>x.id===href)) return; // 去重（链接出现两次）
+    const img = a.querySelector("img");
+    let cover = img ? (img.getAttribute("data-src") || img.getAttribute("src") || "") : "";
+    if(cover && cover.startsWith("/")) cover = MP_BASE + cover;
+    // 标题：卡片容器内 font-black div（浏览器端 DOMParser 正确命中）
+    let title = "";
+    const tdiv = a.parentElement ? a.parentElement.querySelector(".font-black") : null;
+    if(tdiv) title = tdiv.textContent.trim();
+    if(!title){ const alt = img ? img.getAttribute("alt") : ""; title = (alt||"").split(" ").slice(0,2).join(" ") || href.split("/").pop(); }
+    // 徽章：年份/状态/类型（本卡片容器内）
+    const chips = [];
+    const cwrap = a.parentElement;
+    if(cwrap){ cwrap.querySelectorAll(".text-xs").forEach(c=>{ const tx=c.textContent.trim(); if(tx) chips.push(tx); }); }
+    out.push({ id: href, title, cover, meta: chips.slice(0,3).join(" · ") || "MangaPill" });
+  });
+  return out;
+}
+function mpParseDetail(html){
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const h1 = doc.querySelector("h1");
+  const title = h1 ? h1.textContent.trim() : "";
+  let cover = "";
+  const img = doc.querySelector('img[src*="cdn.readdetectiveconan.com"]') || doc.querySelector('img[data-src*="cdn.readdetectiveconan.com"]');
+  if(img) cover = img.getAttribute("src") || img.getAttribute("data-src") || "";
+  // 章节列表
+  const chapters = [];
+  doc.querySelectorAll('a[href^="/chapters/"]').forEach(a=>{
+    const href = a.getAttribute("href");
+    const label = (a.getAttribute("title") || a.textContent.trim() || href.split("/").pop()).trim();
+    chapters.push({ id: href, label });
+  });
+  return { title, cover, chapters };
+}
+function mpParsePages(html){
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const pages = [];
+  doc.querySelectorAll("img.js-page, img[src*='cdn.readdetectiveconan.com'], img[data-src*='cdn.readdetectiveconan.com']").forEach(img=>{
+    const s = img.getAttribute("src") || img.getAttribute("data-src") || "";
+    if(s.includes("cdn.readdetectiveconan.com") && /\.(jpe?g|png|webp)(\?|$)/i.test(s) && !pages.includes(s)){
+      pages.push(s);
+    }
+  });
+  return pages;
 }
 
 /* ---------- 主页 / 搜索 ---------- */
@@ -211,11 +284,19 @@ async function loadHome(){
   $("#grid").innerHTML = "";
   $("#loading").classList.remove("hidden");
   try{
-    const d = await api("/manga", {
-      includes:["cover_art"], availableTranslatedLanguage:langOpts(),
-      order:{latestUploadedChapter:"desc"}, limit:24
-    });
-    renderGrid(d.data);
+    let list;
+    if(src === "mangadex"){
+      const d = await mdApi("/manga", {
+        includes:["cover_art"], availableTranslatedLanguage:langOpts(),
+        order:{latestUploadedChapter:"desc"}, limit:24
+      });
+      list = d.data.map(m=>({ id:m.id, title:titleOf(m.attributes.title), cover:coverUrl(m),
+        meta: m.attributes.lastChapter ? "第"+m.attributes.lastChapter+"话" : "连载中" }));
+    } else {
+      const html = await mpHtml("/");
+      list = mpParseSearch(html).slice(0, 24);
+    }
+    renderGrid(list);
   }catch(e){ $("#grid").innerHTML = '<div class="empty">加载失败：'+e.message+'（请检查网络后重试）</div>'; }
   $("#loading").classList.add("hidden");
 }
@@ -225,51 +306,70 @@ async function doSearch(){
   $("#grid").innerHTML = "";
   $("#loading").classList.remove("hidden");
   try{
-    const params = {includes:["cover_art"], availableTranslatedLanguage:langOpts(), limit:30};
-    if(q) params.title = q;
-    else params.order = {latestUploadedChapter:"desc"};
-    const d = await api("/manga", params);
-    if(!d.data.length) $("#grid").innerHTML = '<div class="empty">没找到相关漫画，试试用日文 / 英文原名搜索</div>';
-    else renderGrid(d.data);
+    let list;
+    if(src === "mangadex"){
+      const params = {includes:["cover_art"], availableTranslatedLanguage:langOpts(), limit:30};
+      if(q) params.title = q;
+      else params.order = {latestUploadedChapter:"desc"};
+      const d = await mdApi("/manga", params);
+      list = d.data.map(m=>({ id:m.id, title:titleOf(m.attributes.title), cover:coverUrl(m),
+        meta: m.attributes.lastChapter ? "第"+m.attributes.lastChapter+"话" : "连载中" }));
+    } else {
+      const html = await mpHtml("/search?q=" + encodeURIComponent(q || ""));
+      list = mpParseSearch(html);
+    }
+    if(!list.length) $("#grid").innerHTML = '<div class="empty">没找到相关漫画，试试用日文 / 英文原名搜索</div>';
+    else renderGrid(list);
   }catch(e){ $("#grid").innerHTML = '<div class="empty">搜索失败：'+e.message+'</div>'; }
   $("#loading").classList.add("hidden");
 }
 function renderGrid(list){
   const g = $("#grid"); g.innerHTML = "";
   list.forEach(m=>{
-    const t = titleOf(m.attributes.title);
-    const c = coverUrl(m);
-    const lastCh = m.attributes.lastChapter ? "第"+m.attributes.lastChapter+"话" : "连载中";
     const card = document.createElement("div");
     card.className = "card";
-    card.innerHTML = '<div class="cover"><img loading="lazy" src="'+(c||"")+'" onerror="this.style.display=\'none\'"><span class="tag">'+t+'</span></div><div class="info"><h3>'+t+'</h3><div class="meta">'+lastCh+'</div></div>';
-    card.onclick = ()=>openDetail(m.id);
+    card.innerHTML = '<div class="cover"><img loading="lazy" src="'+(m.cover||"")+'" onerror="this.style.display=\'none\'"><span class="tag">'+m.title+'</span><span class="src-tag">'+SRC_NAME[src]+'</span></div><div class="info"><h3>'+m.title+'</h3><div class="meta">'+(m.meta||"")+'</div></div>';
+    card.onclick = ()=>openDetail(m.id, m.cover, m.title);
     g.appendChild(card);
   });
 }
 
 /* ---------- 详情 ---------- */
-let curManga = null, curMangaId = null;
-async function openDetail(id){
+let curManga = null, curMangaId = null, curCover = "";
+async function openDetail(id, cover, title){
   $("#loading").classList.remove("hidden");
   try{
-    const d = await api("/manga/"+id, {includes:["cover_art","author","artist"]});
-    curManga = d.data; curMangaId = id;
-    $("#home").classList.add("hidden"); $("#detail").classList.remove("hidden");
-    const a = curManga.attributes;
-    $("#dCover").src = coverUrl(curManga);
-    $("#dTitle").textContent = titleOf(a.title);
-    const authors = (curManga.relationships||[]).filter(r=>r.type==="author"||r.type==="artist")
-      .map(r=>r.attributes?r.attributes.name:"").filter(Boolean);
-    $("#dAuthor").textContent = (authors.length? "作者："+authors.join(" / ") : "") + "　·　更新至 " + (a.lastChapter||"?") + " 话";
-    $("#dDesc").textContent = (a.description && a.description.zh) || (a.description && a.description.en) || "暂无简介";
-    $("#dChips").innerHTML = ['<span class="chip">'+((a.year||"")+" 年")+'</span>','<span class="chip">'+(a.status==="ongoing"?"连载中":a.status==="completed"?"已完结":"状态未知")+'</span>'].join("");
-    await loadChapters(id);
+    if(src === "mangadex"){
+      const d = await mdApi("/manga/"+id, {includes:["cover_art","author","artist"]});
+      const m = d.data;
+      curManga = m; curMangaId = id; curCover = coverUrl(m);
+      $("#home").classList.add("hidden"); $("#detail").classList.remove("hidden");
+      const a = m.attributes;
+      $("#dCover").src = curCover;
+      $("#dTitle").textContent = titleOf(a.title);
+      const authors = (m.relationships||[]).filter(r=>r.type==="author"||r.type==="artist")
+        .map(r=>r.attributes?r.attributes.name:"").filter(Boolean);
+      $("#dAuthor").textContent = (authors.length? "作者："+authors.join(" / ") : "") + "　·　更新至 " + (a.lastChapter||"?") + " 话";
+      $("#dDesc").textContent = (a.description && a.description.zh) || (a.description && a.description.en) || "暂无简介";
+      $("#dChips").innerHTML = ['<span class="chip">'+((a.year||"")+" 年")+'</span>','<span class="chip">'+(a.status==="ongoing"?"连载中":a.status==="completed"?"已完结":"状态未知")+'</span>'].join("");
+      await loadChapters(id);
+    } else {
+      const html = await mpHtml(id); // id = "/manga/2/one-piece"
+      const d = mpParseDetail(html);
+      curManga = d; curMangaId = id; curCover = d.cover;
+      $("#home").classList.add("hidden"); $("#detail").classList.remove("hidden");
+      $("#dCover").src = d.cover;
+      $("#dTitle").textContent = d.title || title || "未知标题";
+      $("#dAuthor").textContent = "来源：MangaPill";
+      $("#dDesc").textContent = "MangaPill 图源 · 章节按页序排列";
+      $("#dChips").innerHTML = '<span class="chip">MangaPill</span>';
+      await renderMpChapters(d.chapters);
+    }
   }catch(e){ toast("加载详情失败："+e.message); }
   $("#loading").classList.add("hidden");
 }
 async function loadChapters(id){
-  const feed = await api("/manga/"+id+"/feed", {
+  const feed = await mdApi("/manga/"+id+"/feed", {
     translatedLanguage:langOpts(), "order[chapter]":"asc", limit:500
   });
   const wrap = $("#dChapters"); wrap.innerHTML = "";
@@ -286,18 +386,35 @@ async function loadChapters(id){
   });
   if(!feed.data.length) $("#dEmpty").classList.remove("hidden"); else $("#dEmpty").classList.add("hidden");
 }
+async function renderMpChapters(chapters){
+  const wrap = $("#dChapters"); wrap.innerHTML = "";
+  const prog = getProgress(curMangaId);
+  chapters.forEach(ch=>{
+    const item = document.createElement("div");
+    item.className = "chap" + (prog && prog.chId===ch.id ? " continue" : "");
+    item.innerHTML = '<div class="t">'+ch.label+'</div>'+(prog&&prog.chId===ch.id?'<div class="go">继续 ›</div>':'<div class="go">阅读 ›</div>');
+    item.onclick = ()=>openReader(curMangaId, ch.id, ch.label);
+    wrap.appendChild(item);
+  });
+  if(!chapters.length) $("#dEmpty").classList.remove("hidden"); else $("#dEmpty").classList.add("hidden");
+}
 
 /* ---------- 阅读器 ---------- */
 let rMangaId=null, rChId=null, rLabel="", rPages=[], rIdx=0;
 async function openReader(mid, chid, label){
   rMangaId=mid; rChId=chid; rLabel=label;
   $("#reader").classList.remove("hidden");
-  $("#rTitle").textContent = (curManga? titleOf(curManga.attributes.title) : "") + " · " + label;
+  $("#rTitle").textContent = (curManga? (curManga.title || (curManga.attributes && titleOf(curManga.attributes.title))) : "") + " · " + label;
   $("#rBody").innerHTML = '<div class="empty" style="color:#888">加载章节…</div>';
   try{
-    const at = await api("/at-home/server/"+chid);
-    const hash = at.chapter.hash;
-    rPages = at.chapter.data.map(p=>at.baseUrl+"/data/"+hash+"/"+p);
+    if(src === "mangadex"){
+      const at = await mdApi("/at-home/server/"+chid);
+      const hash = at.chapter.hash;
+      rPages = at.chapter.data.map(p=>at.baseUrl+"/data/"+hash+"/"+p);
+    } else {
+      const html = await mpHtml(chid); // chid = "/chapters/2-11196000/..."
+      rPages = mpParsePages(html);
+    }
     if(!rPages.length) throw new Error("该章节暂无图片");
     const p = getProgress(mid);
     rIdx = (p && p.chId===chid) ? Math.min(p.page||0, rPages.length-1) : 0;
@@ -310,7 +427,7 @@ function renderPage(){
   const body = $("#rBody");
   body.innerHTML = "";
   const img = document.createElement("img");
-  img.className = "pageimg"; img.src = rPages[rIdx]; img.alt = "第"+(rIdx+1)+"页";
+  img.className = "pageimg"; img.src = viaProxy(rPages[rIdx]); img.alt = "第"+(rIdx+1)+"页";
   body.appendChild(img);
   $("#rPos").textContent = (rIdx+1)+" / "+rPages.length;
   $("#rInd").textContent = (rIdx+1)+"/"+rPages.length;
@@ -322,16 +439,32 @@ function rNext(){ if(rIdx<rPages.length-1){ rIdx++; renderPage(); } else toast("
 function rPrev(){ if(rIdx>0){ rIdx--; renderPage(); } else toast("已经是第一页"); }
 function closeReader(){
   $("#reader").classList.add("hidden");
-  if(curMangaId){ loadChapters(curMangaId).catch(()=>{}); } // 刷新继续阅读标记
+  if(curMangaId){ if(src==="mangadex") loadChapters(curMangaId).catch(()=>{}); else renderMpChapters(curManga.chapters||[]).catch(()=>{}); }
 }
 
 /* ---------- 事件 ---------- */
 $("#doSearch").onclick = doSearch;
 $("#q").addEventListener("keydown", e=>{ if(e.key==="Enter") doSearch(); });
-document.querySelectorAll(".lang button").forEach(b=>{
+// 图源切换
+function setSource(s){
+  src = s;
+  try{ localStorage.setItem(SRC_KEY, s); }catch(e){}
+  $("#srcMd").classList.toggle("src-on", s==="mangadex");
+  $("#srcMp").classList.toggle("src-on", s==="mangapill");
+  // MangaPill 无语言筛选，切过去时语言按钮禁用样式
+  document.querySelectorAll(".lang button[data-lang]").forEach(b=>{
+    if(s==="mangapill") b.style.opacity = .4;
+    else b.style.opacity = 1;
+  });
+  doSearch();
+}
+$("#srcMd").onclick = ()=>setSource("mangadex");
+$("#srcMp").onclick = ()=>setSource("mangapill");
+document.querySelectorAll(".lang button[data-lang]").forEach(b=>{
   b.onclick = ()=>{
-    document.querySelectorAll(".lang button").forEach(x=>x.classList.remove("on"));
+    document.querySelectorAll(".lang button[data-lang]").forEach(x=>x.classList.remove("on"));
     b.classList.add("on"); lang = b.dataset.lang;
+    if(src==="mangapill"){ toast("MangaPill 源不支持语言筛选（切换回 MangaDex 可用）"); }
     doSearch();
   };
 });
@@ -377,6 +510,8 @@ document.addEventListener("touchend", e=>{
 }, {passive:true});
 
 /* 启动 */
+try{ const s = localStorage.getItem(SRC_KEY); if(s==="mangapill"||s==="mangadex") src=s; }catch(e){}
+setSource(src);
 loadHome();
 </script>
 </body>
