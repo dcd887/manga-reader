@@ -116,6 +116,8 @@ main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
       <button id="saveProxy">保存</button>
     </div>
     <button id="clearProxy" style="margin-top:8px;background:none;border:none;color:var(--sub);font-size:12px;cursor:pointer;text-decoration:underline">恢复直连（清除代理）</button>
+    <button id="netCheckBtn" style="margin-top:4px;background:none;border:none;color:var(--accent);font-size:12px;cursor:pointer;text-decoration:underline">网络自检（诊断连不上哪个）</button>
+    <div id="netResult" style="margin-top:8px;font-size:12px;line-height:1.9;color:var(--sub)"></div>
   </div>
 </div>
 
@@ -186,12 +188,34 @@ function viaProxy(url){
   const proxy = getProxy();
   return proxy ? proxy + "/" + url : url;
 }
-// 带超时的 fetch（8 秒），避免挂起
-async function fetchT(url, headers, ms){
+// 带超时的 fetch（默认 8 秒），避免挂起；mode 用于跨域探测
+async function fetchT(url, headers, ms, mode){
   const c = new AbortController();
   const t = setTimeout(()=>c.abort(), ms || 8000);
-  try{ return await fetch(url, {headers, signal:c.signal}); }
+  try{ return await fetch(url, {headers, signal:c.signal, mode}); }
   finally{ clearTimeout(t); }
+}
+// 网络自检：依次探测 MangaDex / MangaPill / 代理可达性
+async function netCheck(){
+  const box = $("#netResult"); box.innerHTML = "";
+  const mk = (k, ok, msg) => {
+    const d = document.createElement("div");
+    d.textContent = k + "：" + (ok ? "✅ 可达" : "❌ 不可达") + (msg ? "　" + msg : "");
+    d.style.color = ok ? "#2e7d4f" : "#c25e4a";
+    box.appendChild(d);
+  };
+  const tests = [
+    {k:"MangaDex API", url:"https://api.mangadex.org/ping"},
+    {k:"MangaPill 网站", url:"https://mangapill.com/", nocors:true},
+    {k:"Cloudflare 代理", url:(getProxy() || "https://manga-proxy.mcjj.workers.dev") + "/ping"}
+  ];
+  for(const t of tests){
+    try{
+      const r = await fetchT(t.url, {}, 6000, t.nocors ? "no-cors" : undefined);
+      if(t.nocors){ mk(t.k, true); }
+      else { const txt = (await r.text()).trim(); mk(t.k, true, txt && txt.length<15 ? "返回："+txt : ""); }
+    }catch(e){ mk(t.k, false); }
+  }
 }
 // MangaDex JSON API：双通道降级——先直连，失败且配置了代理时自动走代理
 async function mdApi(path, params){
@@ -514,6 +538,7 @@ $("#clearProxy").onclick = ()=>{
   toast("已恢复直连");
   loadHome();
 };
+$("#netCheckBtn").onclick = netCheck;
 document.addEventListener("keydown", e=>{
   if($("#reader").classList.contains("hidden")) return;
   if(e.key==="ArrowRight"||e.key==="PageDown") rNext();
