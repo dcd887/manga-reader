@@ -170,6 +170,10 @@ main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
 "use strict";
 const MD_API = "https://api.mangadex.org";
 const MP_BASE = "https://mangapill.com";
+// 本地模式：页面由本地代理(manga_proxy.py)托管时，API 走同源 /api、/mp，无需 CORS
+const IS_LOCAL = location.hostname !== "dcd887.github.io";
+const MD_BASE = IS_LOCAL ? location.origin + "/api" : MD_API;
+const MP_FETCH_BASE = IS_LOCAL ? location.origin + "/mp" : "";
 const PROXY_KEY = "mangaReaderProxy_v1";
 const SRC_KEY = "mangaReaderSource_v1";
 const $ = s => document.querySelector(s);
@@ -219,7 +223,7 @@ async function netCheck(){
 }
 // MangaDex JSON API：双通道降级——先直连，失败且配置了代理时自动走代理
 async function mdApi(path, params){
-  const u = new URL(MD_API + path);
+  const u = new URL(MD_BASE + path);
   if(params){
     for(const [k,v] of Object.entries(params)){
       if(v===undefined||v===null) continue;
@@ -235,7 +239,7 @@ async function mdApi(path, params){
     if(r.ok) return r.json();
     err1 = "HTTP "+r.status;
   }catch(e){ err1 = e.message; }
-  const proxy = getProxy();
+  const proxy = IS_LOCAL ? "" : getProxy();
   if(proxy){
     try{
       const r = await fetchT(proxy + "/" + u.toString(), {});
@@ -245,8 +249,13 @@ async function mdApi(path, params){
   }
   throw new Error("当前网络连不上 MangaDex（"+err1+"）：可 1) 换个网络 2) ⚙ 填 Cloudflare Worker 代理再试");
 }
-// MangaPill HTML 抓取（必须走代理，MangaPill 无 CORS 头）
+// MangaPill HTML 抓取：本地模式走同源 /mp；线上模式需 CORS 代理（MangaPill 无 CORS 头）
 async function mpHtml(path){
+  if(MP_FETCH_BASE){
+    const r = await fetch(MP_FETCH_BASE + path);
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    return r.text();
+  }
   if(!getProxy()) throw new Error("MangaPill 需配置代理（设置 ⚙ 填入 Cloudflare Worker 地址）");
   const r = await fetch(viaProxy(MP_BASE + path), {headers:{"User-Agent":"MangaLane/1.0 (browser reader)"}});
   if(!r.ok) throw new Error("HTTP "+r.status);
@@ -352,9 +361,10 @@ async function doSearch(){
   try{
     let list;
     if(src === "mangadex"){
-      const params = {includes:["cover_art"], availableTranslatedLanguage:langOpts(), limit:30};
+      // 有关键词时不带语言过滤：MangaDex 的 title+zh 组合会返回 0（API 组合 bug），去掉后中英日原题都能搜到
+      const params = {includes:["cover_art"], limit:30};
       if(q) params.title = q;
-      else params.order = {latestUploadedChapter:"desc"};
+      else { params.availableTranslatedLanguage = langOpts(); params.order = {latestUploadedChapter:"desc"}; }
       const d = await mdApi("/manga", params);
       list = d.data.map(m=>({ id:m.id, title:titleOf(m.attributes.title), cover:coverUrl(m),
         meta: m.attributes.lastChapter ? "第"+m.attributes.lastChapter+"话" : "连载中" }));
