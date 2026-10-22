@@ -110,7 +110,7 @@ main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
 <div class="cfg hidden" id="cfgPanel">
   <div class="cfg-inner">
     <div style="font-weight:700;margin-bottom:8px">图源代理设置</div>
-    <div class="cfg-hint">MangaDex 可直连；MangaPill 需代理（其接口不带 CORS 头）。<br>部署到 GitHub Pages 或手机访问时建议填代理地址（免费 Cloudflare Worker）。</div>
+    <div class="cfg-hint">MangaDex 图源直连即可，无需代理（电脑 / 手机打开即用）；<br>仅 MangaPill 需要代理（其接口不带 CORS 头），不填则切到 MangaPill 时会提示。</div>
     <div class="cfg-row">
       <input id="proxyUrl" placeholder="https://你的代理名.workers.dev" autocomplete="off">
       <button id="saveProxy">保存</button>
@@ -186,7 +186,7 @@ function viaProxy(url){
   const proxy = getProxy();
   return proxy ? proxy + "/" + url : url;
 }
-// MangaDex JSON API（保留原逻辑）
+// MangaDex JSON API：始终直连（其接口带 CORS 头，国内网络直连可达；不经过代理）
 async function mdApi(path, params){
   const u = new URL(MD_API + path);
   if(params){
@@ -197,7 +197,7 @@ async function mdApi(path, params){
       else u.searchParams.append(k, v);
     }
   }
-  const r = await fetch(viaProxy(u.toString()), {headers:{"User-Agent":"MangaLane/1.0 (browser reader)"}});
+  const r = await fetch(u.toString(), {headers:{"User-Agent":"MangaLane/1.0 (browser reader)"}});
   if(!r.ok) throw new Error("HTTP "+r.status);
   return r.json();
 }
@@ -427,7 +427,7 @@ function renderPage(){
   const body = $("#rBody");
   body.innerHTML = "";
   const img = document.createElement("img");
-  img.className = "pageimg"; img.src = viaProxy(rPages[rIdx]); img.alt = "第"+(rIdx+1)+"页";
+  img.className = "pageimg"; img.src = rPages[rIdx]; img.alt = "第"+(rIdx+1)+"页"; // 图片直连（img 标签不受 CORS 限制，最快）
   body.appendChild(img);
   $("#rPos").textContent = (rIdx+1)+" / "+rPages.length;
   $("#rInd").textContent = (rIdx+1)+"/"+rPages.length;
